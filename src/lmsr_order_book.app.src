@@ -1,0 +1,12 @@
+{application, lmsr_order_book,
+ [
+  {description, ""},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { lmsr_order_book_app, []}},
+  {env, []}
+ ]}.
