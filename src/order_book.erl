@@ -19,7 +19,7 @@ add_orders(Root, BuyOrders, SellOrders) ->
 %to add an order, we need to know the next lower order.
 %We need a function that takes a merkle root, and a list of new orders. It produces merkle proofs of all the data that got changed, and the new merkle root.
 %full nodes only need to download orders who's pointer changed.
-%This function is run by miners when they are computing the next header. Only miners that know about the relevant order can include transactions that change them.
+%This function is run by miners when they are computing the next header. Only miners that know about the relevant orders can include transactions that change them.
 %When the miner shares the block, they send proofs with it, that way more nodes will accept the new block sooner.
     
     %First, sort the orders.
@@ -28,30 +28,97 @@ add_orders(Root, BuyOrders, SellOrders) ->
     Heads = leaf:value(HeadsLeaf),
     {BuyHead, SellHead} = deserialize_heads(Heads),
     {BuyHead2, Root2, Proofs2} = 
-	add_orders2(BuyHead, BuyOrders, Root),
+	add_orders3(BuyHead, orders:sort(BuyOrders), Root, Root),
+    %BuyHead is the integer that is a key to look up the first element of the list of buys.
+    %If the new orders are all bigger than the loset old order, then BuyHead2 should remain unchanged, it is still the head of the list.
     {SellHead2, Root3, Proofs3} = 
-	add_orders2(SellHead, SellOrders, Root2),
+	add_orders3(SellHead, orders:sort(SellOrders), Root2, Root),
     P = Proof ++ Proofs2 ++ Proofs3,
     NewHeads = serialize_heads(BuyHead2, SellHead2),
     Root4 = trie:put(1, NewHeads, Root3, open_orders),
     {Root4, P}.
-add_orders2(Head, [], Root) ->
+add_orders3(Head, [], Root, _) ->
     {Head, Root, []};
-add_orders2(0, [S|SortedOrders], Root) ->
-    %We reached the end of the on-chain list, so now we should keep appending the orders to the list.
-    NewHead = orders:write(S, Root2),
-    {NewRoot, Proofs} = add_orders3(SortedOrders, Root2),
-    {NewHead, NewRoot, Proofs};
-add_orders2(_Head, _SortedOrders, _Proofs, _Root) ->
-    %next, walk through the merkelized orders, and merge the new orders in. 
-    %Accumulate proofs of how everything looked _before_ we change it.
-    %We need to prove that every order that can be matched was matched. So we need to include the unmatched trade that is adjacent to a matched trade. To show how its price is too high to be matched.
-    %If the Merkelized Order points to null, then append the rest of the orders to the merkle tree.
-    ok.
-    
+add_orders3(Head, [R|Orders], Root, FirstRoot) ->
+    RID = orders:id(R),
+    {NewHead, Proofs1, Root2} = 
+	if
+	    Head == 0 -> 
+		
+		{_, empty, ProofsInner} = orders:get(orders:id(R), FirstRoot),
+		Root3 = orders:write(R, Root),
+		{RID, ProofsInner, Root3};
+	    true ->
+		{_, HeadOrder, _Proofs} = orders:get(Head, Root),
+		HeadPrice = orders:price(HeadOrder),
+		RPrice = orders:price(R),
+		{NH, Root4, ProofsInner} = 
+		    if
+			RPrice > HeadPrice -> 
+			    {_, empty, Proofs5} = orders:get(orders:id(R), FirstRoot),
+			    Root3 = orders:write(R, Root),
+			    {RID, Root3, Proofs5};
+			true -> {Head, Root, []}
+		    end,
+		{NH, ProofsInner, Root4}
+	end,
+    {NewRoot, Proofs2} = add_orders2(NewHead,[R|Orders], Root2, []),
+    {NewHead, NewRoot, Proofs1++Proofs2}.
+add_orders2(List, [], Root, Proofs) ->
+    %Root2 = orders:write(List, Root),%The deepest element of the linked list may be in a new location.
+    {Root, Proofs};
+add_orders2(List, [S|SortedOrders], Root, Proofs) ->
+    N = orders:id(S),%Users select an empty location in the tree to store their order. If multiple users select the same location, then only one of the trades can be included.
+
+    %N needs to be in the range of values that the trie can store. We need to check.
+    case List of
+	0 ->
+	    Root2 = orders:write(S, Root),
+	    add_orders2(N, SortedOrders, Root2, Proofs);
+	_ -> add_orders22(List, [S|SortedOrders], Root, Proofs)
+    end.
+add_orders22(List, [], Root, Proofs) ->
+    %Root2 = orders:write(List, Root),%The deepest element of the linked list may be in a new location.
+    {Root, Proofs};
+
+add_orders22(List, [S|SortedOrders], Root, Proofs) ->
+    {_, Order, _Proofs3} = orders:get(List, Root),
+    P = orders:pointer(Order),
+    N = orders:id(S),
+    case P of
+	0 -> 
+	    Order2 = orders:update_pointer(Order, N),
+	    Root2 = orders:write(Order2, Root),
+	    %{_, empty, Proofs2} = orders:get(orders:id(Order2), Root),
+	    Root3 = orders:write(S, Root2),
+	    add_orders22(N,
+			SortedOrders,
+			Root3, 
+			Proofs);
+	X -> 
+	    OldP = orders:price(Order),
+	    NewP = orders:price(S),
+	    if
+		NewP > OldP ->
+		    add_orders22(orders:pointer(Order),
+				[S|SortedOrders],
+				Root, 
+				Proofs);
+		true -> 
+		    S2 = orders:update_id(S, List),
+		    S3 = orders:update_pointer(S, N),
+		    Root2 = orders:write(S3, Root),
+		    List2 = orders:update_id(List, N),
+		    add_orders22(List2, 
+				 SortedOrders, 
+				 Root2, 
+				 Proofs)
+	    end
+    end.
+ 
 remove_orders(_Root, _BuyOrders, _SellOrders) ->
     %reverse of add_orders
-    %we need to zero out the empty spots.
+    %we need to zero out the empty spots, and fix the pointers.
     NewRoot = ok,
     Proofs = ok,
     {NewRoot, Proofs}.
@@ -86,15 +153,17 @@ empty_list() ->
 
 test() ->
     %start with an empty order book, add some orders, remove some orders, match some, check the final result is good.
-    OrdersA = [orders:make_order(111, 0, 1, 256*8, 0, 100),
+    OrdersA = [orders:make_order(5, 0, 1, 256*8, 0, 100),
 	       orders:make_order(2, 0, 1, 256*10, 0, 100)],
     OrdersB = [orders:make_order(3, 0, 1, 256*9, 0, 100),
 	       orders:make_order(4, 0, 1, 256*7, 0, 100)],
     L4 = [],
     L = empty_list(),
+    L3 = add_orders(L, OrdersB, []),
+    L2 = add_orders(L, OrdersA++OrdersB, []).
+test2(L, OrdersA, OrdersB) ->
     L2 = add_orders(L, OrdersA++OrdersB, []),
     L3 = remove_orders(L2, OrdersA, []),
-    L3 = add_orders(L, OrdersB, []),
     OrdersC = [orders:make_order(5, 0, 2, 256*8, 0, 80)],
     Sell = add_orders(L, [], OrdersC),
     L5 = match_orders(L3, Sell),

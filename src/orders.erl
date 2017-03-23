@@ -1,5 +1,7 @@
 -module(orders).
--export([write/2, delete/2, get/2, make_order/6, test/0]).
+-export([write/2, delete/2, get/2, make_order/6, id/1, 
+	 pointer/1, price/1, update_pointer/2, sort/1,
+	 test/0]).
 
 %each oracle has it's own trie of orders. This single tree contains 2 linked lists, one of buys, and the other of sells.
 %Besides the tree, we need to remember the current head of each list. Maybe we can store the heads in location 1 of the tree.
@@ -12,7 +14,11 @@
 		price = 0, 
 		pointer = 0, %either points to the next element of the list, or if it is the last element, it points to 0.
 		amount = 0}).%amount of coins they want to spend.
+id(X) -> X#order.id.
+pointer(X) -> X#order.pointer.
 price(X) -> X#order.price.
+update_pointer(X, P) ->
+    X#order{pointer = P}.
 make_order(ID, OID, AID, Price, Pointer, Amount) ->
     #order{id = ID, account_id = AID, 
 	   oracle_id = OID,
@@ -55,7 +61,32 @@ get(ID, Root) ->
 	    empty -> empty;
 	    L -> deserialize(leaf:value(L))
 	end,
-    {RH, V, Proof}.
+    {RH, V, [Proof]}.
+sort(L) ->
+    L2 = to_lists(L),
+    hd(merge_sort(L2)).
+to_lists([]) -> [];
+to_lists([H|T]) -> 
+    [[H]|to_lists(T)].
+merge_sort([]) -> [[]];
+merge_sort([X]) ->
+    [X];
+merge_sort(X) ->
+    merge_sort(merge(X)).
+merge([]) -> [];
+merge([A]) -> [A];
+merge([A|[B|T]]) -> 
+    [merge2(A, B)|merge(T)].
+merge2([], A) -> A;
+merge2(A, []) -> A;
+merge2([A|AT], [B|BT]) -> 
+    AP = A#order.price,
+    BP = B#order.price,
+    if
+	BP < AP -> [B|merge2([A|AT], BT)];
+	true -> [A|merge2(AT, [B|BT])]
+    end.
+	    
 		
     
 test() ->
