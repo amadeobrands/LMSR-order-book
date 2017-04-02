@@ -1,7 +1,7 @@
 -module(orders).
 -export([write/2, delete/2, get/2, make_order/6, id/1, 
 	 pointer/1, price/1, update_pointer/2, sort/1,
-	 update_id/2,
+	 update_id/2, root_hash/1,
 	 test/0]).
 
 %each oracle has it's own trie of orders. This single tree contains 2 linked lists, one of buys, and the other of sells.
@@ -22,6 +22,9 @@ update_pointer(X, P) ->
     X#order{pointer = P}.
 update_id(X, I) ->
     X#order{id = I}.
+root_hash(X) ->
+    {A, _, P} = trie:get(1, X, open_orders), 
+    {A, P}.
 make_order(ID, OID, AID, Price, Pointer, Amount) ->
     #order{id = ID, account_id = AID, 
 	   oracle_id = OID,

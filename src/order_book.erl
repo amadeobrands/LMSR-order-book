@@ -10,9 +10,6 @@ add_orders(Root, BuyOrders, SellOrders) ->
     {_, HeadsLeaf, Proof} = trie:get(1, Root, open_orders),
     Heads = leaf:value(HeadsLeaf),
     {BuyHead, SellHead} = deserialize_heads(Heads),
-    io:fwrite("add orders 1 "),
-    io:fwrite(integer_to_list(BuyHead)),
-    io:fwrite("\n"),
     {BuyHead2, Root2, Proofs2} = 
 	add_orders2(BuyHead, orders:sort(BuyOrders), Root, Root),
     %BuyHead is the integer that is a pointer to the first element of the list of buys.
@@ -23,11 +20,9 @@ add_orders(Root, BuyOrders, SellOrders) ->
     NewHeads = serialize_heads(BuyHead2, SellHead2),
     Root4 = trie:put(1, NewHeads, Root3, open_orders),
     {Root4, P}.
-add_orders2(H, [], Root, FirstRoot) ->
-    %calculates the new head
-    {H, Root, []};
+add_orders2(Head, [], Root, FirstRoot) ->
+    {Head, Root, []};
 add_orders2(0, [R|Orders], Root, FirstRoot) ->
-    io:fwrite("add orders 000\n"),
     RID = orders:id(R),
     {_, empty, Proof1} = orders:get(RID, FirstRoot),
     {Head2, NewRoot, Proof2} = add_orders2(0, Orders, Root, FirstRoot),
@@ -35,33 +30,24 @@ add_orders2(0, [R|Orders], Root, FirstRoot) ->
     Root2 = orders:write(R2, NewRoot),
     {RID, Root2, Proof1++Proof2};
 add_orders2(Head, [R|Orders], Root, FirstRoot) ->
-    io:fwrite("add orders 2\n"),
-    io:fwrite(integer_to_list(Head)),
-    io:fwrite("\n"),
     {_, OldHead, _Proof1} = orders:get(Head, Root),
     OldPrice = orders:price(OldHead),
     NewPrice = orders:price(R),
-    {HeadPointer, Root2, Proof2} = 
-	if
-	    NewPrice < OldPrice ->
-		RID = orders:id(R),
-		{Head2, Root3, Proofs} = add_orders2(Head, Orders, Root, FirstRoot),
-		R2 = orders:update_pointer(R, Head2),
-		Root4 = orders:write(R2, Root3),
-		{RID, Root4, Proofs};
-	    true ->
-		io:fwrite("new price bigger\n"),
-		{Head2, Root3, Proofs} = add_orders2(orders:pointer(OldHead), [R|Orders], Root, FirstRoot),
-		NewHead = orders:update_pointer(OldHead, Head2),
-		Root4 = orders:write(NewHead, Root3),
-		{Head, Root4, Proofs}
-	end,
-    {HeadPointer, Root2, Proof2}.
+    if
+	NewPrice < OldPrice ->
+	    RID = orders:id(R),
+	    {Head2, Root3, Proofs} = add_orders2(Head, Orders, Root, FirstRoot),
+	    R2 = orders:update_pointer(R, Head2),
+	    Root4 = orders:write(R2, Root3),
+	    {RID, Root4, Proofs};
+	true ->
+	    io:fwrite("new price bigger\n"),
+	    {Head2, Root3, Proofs} = add_orders2(orders:pointer(OldHead), [R|Orders], Root, FirstRoot),
+	    NewHead = orders:update_pointer(OldHead, Head2),
+	    Root4 = orders:write(NewHead, Root3),
+	    {Head, Root4, Proofs}
+    end.
 	    
-%				Proofs)
-%	    end
-%    end.
- 
 remove_orders(Root, BuyOrders, SellOrders) ->
     %reverse of add_orders
     %we need to zero out the empty spots, and fix the pointers.
@@ -75,29 +61,32 @@ remove_orders(Root, BuyOrders, SellOrders) ->
     NewHeads = serialize_heads(BuyHead2, SellHead2),
     NewRoot = trie:put(1, NewHeads, Root3, open_orders),
     {NewRoot, Proof++Proofs2++Proofs3}.
-remove_orders2(Head, [], Root, _) ->
+remove_orders2(0, [], Root, _) ->
+    {0, Root, []};
+remove_orders2(Head, [], Root, FirstRoot) ->
     %removing none of the orders
-    {Head, Root, []};
+    {_, HeadOrder, _Proofs} = orders:get(Head, Root),
+    {Head2, Root2, Proofs} = remove_orders2(orders:pointer(HeadOrder), [], Root, FirstRoot),
+    H2 = orders:update_pointer(HeadOrder, Head2),
+    Root3 = orders:write(H2, Root2),
+    {Head, Root3, Proofs};
 remove_orders2(Head, [R|Orders], Root, FirstRoot) ->
-    RID = rem_orders:id(R),
-    false = Head == 0,%if there is nothing to remove, and we want to remove something, that is an error.
+    RID = orders:id(R),
     {_, HeadOrder, _Proofs} = orders:get(Head, Root),
     HID = orders:id(HeadOrder),
-    if
+    Next = orders:pointer(HeadOrder),
+    if 
 	HID == RID -> 
 	    %remove the order. 
-	    %write the pointer from the removed order onto whatever used to point to the order we removed
-	    ok;
-	true -> 
-	    %recur
-	    ok
-    end,
-	    %{_
-    NewHead = ok,
-    NewRoot = ok,
-    Proofs1 = ok,
-    Proofs2 = ok,
-    {NewHead, NewRoot, Proofs1++Proofs2}.
+	    %write the pointer from the removed order onto whatever used to point to the order we removed 
+	    Root2 = orders:delete(HID, Root),
+	    remove_orders2(Next, Orders, Root2, FirstRoot);
+	true ->
+	    {Head2, Root2, Proofs} = remove_orders2(Next, [R|Orders], Root, FirstRoot),
+	    R2 = orders:update_pointer(HeadOrder, Head2),
+	    Root3 = orders:write(R2, Root2),
+	    {Head, Root3, Proofs}
+    end.
 
 match_orders(_BuyRoot, _SellRoot) ->
 %We need a function that takes a merkle root, and closes as many orders as possible. It should produce the new merkle root.
@@ -138,8 +127,8 @@ test() ->
     {L3, _Proofs} = add_orders(L, OrdersA, []),
     {L4, _} = add_orders(L3, OrdersB, []),
     {L2, _} = add_orders(L, OrdersA++OrdersB, []),
-    {RH, _, _} = trie:get(1, L4, open_orders),
-    {RH, _, _} = trie:get(1, L2, open_orders),
+    {RH, _} = orders:root_hash(L4),
+    {RH, _} = orders:root_hash(L2),
     {_, HeadsLeaf, _} = trie:get(1, L4, open_orders),
     {BuyHead, _} = deserialize_heads(leaf:value(HeadsLeaf)),
     {_, Order1, _} = orders:get(BuyHead, L4),
@@ -149,7 +138,26 @@ test() ->
     {_, Order3, _} = orders:get(P3, L4),
     P4 = orders:pointer(Order3),
     {_, Order4, _} = orders:get(P4, L4),
-    {Order1, Order2, Order3, Order4}.
+    {Order1, Order2, Order3, Order4},
+    {L5, _} = remove_orders(L2, OrdersB, []),
+    %{_, HeadsLeaf2, _} = trie:get(1, L5, open_orders),
+    %{BuyHead2, _} = deserialize_heads(leaf:value(HeadsLeaf2)),
+    %{_, Order1a, _} = orders:get(BuyHead2, L5),
+    %P1a = orders:pointer(Order1a),
+    %{_, Order2a, _} = orders:get(P1a, L5),
+    %{Order1a, Order2a},
+    %io:fwrite("order book l3 "),
+    %{_, HeadsLeaf3, _} = trie:get(1, L3, open_orders),
+    %{BuyHead3, _} = deserialize_heads(leaf:value(HeadsLeaf3)),
+    %{_, Order1b, _} = orders:get(BuyHead3, L3),
+    %P1b = orders:pointer(Order1b),
+    %{_, Order2b, _} = orders:get(P1b, L3),
+    %{Order1a, Order2a} = {Order1b, Order2b},
+    {RH2, _} = orders:root_hash(L5),
+    {RH2, _} = orders:root_hash(L3),
+    success.
+
+
     %0 = orders:pointer(Order4),
     %4 = orders:id(Order1),
     %5 = orders:id(Order2),
