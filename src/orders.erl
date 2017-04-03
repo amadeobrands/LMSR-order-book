@@ -1,6 +1,6 @@
 -module(orders).
 -export([write/2, delete/2, get/2, make_order/6, id/1, 
-	 pointer/1, price/1, update_pointer/2, sort/1,
+	 pointer/1, price/1, update_pointer/2, sort/2,
 	 update_id/2, root_hash/1,
 	 test/0]).
 
@@ -68,29 +68,30 @@ get(ID, Root) ->
 	    L -> deserialize(leaf:value(L))
 	end,
     {RH, V, [Proof]}.
-sort(L) ->
+sort(L, F) ->
     L2 = to_lists(L),
-    hd(merge_sort(L2)).
+    hd(merge_sort(L2, F)).
 to_lists([]) -> [];
 to_lists([H|T]) -> 
     [[H]|to_lists(T)].
-merge_sort([]) -> [[]];
-merge_sort([X]) ->
+merge_sort([], _) -> [[]];
+merge_sort([X], _) ->
     [X];
-merge_sort(X) ->
-    merge_sort(merge(X)).
-merge([]) -> [];
-merge([A]) -> [A];
-merge([A|[B|T]]) -> 
-    [merge2(A, B)|merge(T)].
-merge2([], A) -> A;
-merge2(A, []) -> A;
-merge2([A|AT], [B|BT]) -> 
+merge_sort(X, F) ->
+    merge_sort(merge(X, F), F).
+merge([], _) -> [];
+merge([A], _) -> [A];
+merge([A|[B|T]], F) -> 
+    [merge2(A, B, F)|merge(T, F)].
+merge2([], A, _) -> A;
+merge2(A, [], _) -> A;
+merge2([A|AT], [B|BT], F) -> 
     AP = A#order.price,
     BP = B#order.price,
+    C = F(BP, AP),
     if
-	BP < AP -> [B|merge2([A|AT], BT)];
-	true -> [A|merge2(AT, [B|BT])]
+	C -> [B|merge2([A|AT], BT, F)];
+	true -> [A|merge2(AT, [B|BT], F)]
     end.
 	    
 		
@@ -98,4 +99,9 @@ merge2([A|AT], [B|BT]) ->
 test() ->
     X = make_order(1,0,2,3,4,5),
     X = deserialize(serialize(X)),
-    success.
+    sort([make_order(1,1,1,1,1,1),
+	  make_order(1,1,1,3,1,1),
+	  make_order(1,1,1,2,1,1),
+	  make_order(1,1,1,4,1,1)],
+	 fun(X, Y) -> X>Y end).
+    %success.

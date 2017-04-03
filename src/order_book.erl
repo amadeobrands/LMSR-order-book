@@ -10,39 +10,42 @@ add_orders(Root, BuyOrders, SellOrders) ->
     {_, HeadsLeaf, Proof} = trie:get(1, Root, open_orders),
     Heads = leaf:value(HeadsLeaf),
     {BuyHead, SellHead} = deserialize_heads(Heads),
+    GT = fun(X, Y) -> X>Y end,
     {BuyHead2, Root2, Proofs2} = 
-	add_orders2(BuyHead, orders:sort(BuyOrders), Root, Root),
+	add_orders2(BuyHead, orders:sort(BuyOrders, GT), Root, Root, GT),
     %BuyHead is the integer that is a pointer to the first element of the list of buys.
     %If the new orders are all bigger than the lowest old order, then BuyHead2 should remain unchanged, it is still the head of the list.
+    LT = fun(X, Y) -> X<Y end,
     {SellHead2, Root3, Proofs3} = 
-	add_orders2(SellHead, orders:sort(SellOrders), Root2, Root),
+	add_orders2(SellHead, orders:sort(SellOrders, LT), Root2, Root, LT),
     P = Proof ++ Proofs2 ++ Proofs3,
     NewHeads = serialize_heads(BuyHead2, SellHead2),
     Root4 = trie:put(1, NewHeads, Root3, open_orders),
     {Root4, P}.
-add_orders2(Head, [], Root, FirstRoot) ->
+add_orders2(Head, [], Root, _FirstRoot, _) ->
     {Head, Root, []};
-add_orders2(0, [R|Orders], Root, FirstRoot) ->
+add_orders2(0, [R|Orders], Root, FirstRoot, F) ->
     RID = orders:id(R),
     {_, empty, Proof1} = orders:get(RID, FirstRoot),
-    {Head2, NewRoot, Proof2} = add_orders2(0, Orders, Root, FirstRoot),
+    {Head2, NewRoot, Proof2} = add_orders2(0, Orders, Root, FirstRoot, F),
     R2 = orders:update_pointer(R, Head2), 
     Root2 = orders:write(R2, NewRoot),
     {RID, Root2, Proof1++Proof2};
-add_orders2(Head, [R|Orders], Root, FirstRoot) ->
+add_orders2(Head, [R|Orders], Root, FirstRoot, F) ->
     {_, OldHead, _Proof1} = orders:get(Head, Root),
     OldPrice = orders:price(OldHead),
     NewPrice = orders:price(R),
+    Bool = F(NewPrice, OldPrice),
     if
-	NewPrice < OldPrice ->
+	Bool ->
 	    RID = orders:id(R),
-	    {Head2, Root3, Proofs} = add_orders2(Head, Orders, Root, FirstRoot),
+	    {Head2, Root3, Proofs} = add_orders2(Head, Orders, Root, FirstRoot, F),
 	    R2 = orders:update_pointer(R, Head2),
 	    Root4 = orders:write(R2, Root3),
 	    {RID, Root4, Proofs};
 	true ->
 	    io:fwrite("new price bigger\n"),
-	    {Head2, Root3, Proofs} = add_orders2(orders:pointer(OldHead), [R|Orders], Root, FirstRoot),
+	    {Head2, Root3, Proofs} = add_orders2(orders:pointer(OldHead), [R|Orders], Root, FirstRoot, F),
 	    NewHead = orders:update_pointer(OldHead, Head2),
 	    Root4 = orders:write(NewHead, Root3),
 	    {Head, Root4, Proofs}
@@ -54,10 +57,12 @@ remove_orders(Root, BuyOrders, SellOrders) ->
     {_, HeadsLeaf, Proof} = trie:get(1, Root, open_orders),
     Heads = leaf:value(HeadsLeaf),
     {BuyHead, SellHead} = deserialize_heads(Heads),
+    GT = fun(X, Y) -> X>Y end,
     {BuyHead2, Root2, Proofs2} = 
-	remove_orders2(BuyHead, orders:sort(BuyOrders), Root, Root),
+	remove_orders2(BuyHead, orders:sort(BuyOrders, GT), Root, Root),
+    LT = fun(X, Y) -> X<Y end,
     {SellHead2, Root3, Proofs3} = 
-	remove_orders2(SellHead, orders:sort(SellOrders), Root2, Root),
+	remove_orders2(SellHead, orders:sort(SellOrders, LT), Root2, Root),
     NewHeads = serialize_heads(BuyHead2, SellHead2),
     NewRoot = trie:put(1, NewHeads, Root3, open_orders),
     {NewRoot, Proof++Proofs2++Proofs3}.
