@@ -1,5 +1,7 @@
 Letting users select the location in the list orders:id is a bad idea. Instead it should be stored by the hash of a value. Otherwise an attacker could bribe the miners to censor participation in the oracle.
 
+A problem with storing by hash is that sometimes a trade is only partially matched, so it's new amount is less than the old. So the location where the data is stored would change. Maybe this isn't a problem?
+
 We should add checks to make sure any value fed into the oracle is within the range of values that the merkle tree can handle.
 
 

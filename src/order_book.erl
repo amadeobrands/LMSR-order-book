@@ -1,5 +1,5 @@
 -module(order_book).
--export([add_orders/3, match_orders/2, test/0]).
+-export([add_orders/3, match_orders/1, test/0]).
 
 add_orders(Root, BuyOrders, SellOrders) ->
 %to add an order, we need to know the next lower order.
@@ -93,15 +93,65 @@ remove_orders2(Head, [R|Orders], Root, FirstRoot) ->
 	    {Head, Root3, Proofs}
     end.
 
-match_orders(_BuyRoot, _SellRoot) ->
+match_orders(Root) ->
 %We need a function that takes a merkle root, and closes as many orders as possible. It should produce the new merkle root.
 %full nodes only need to download copies of the orders that get matched, and orders that used to point to orders that got matched. 
     %We need to prove that all the orders that can be matched were matched.
     %We need to prove that the price is the price that matches the most trades possible.
     %we need to zero out the empty stuff in the trie.
-    NewRoot = ok,
-    Proofs = ok,
-    {NewRoot, Proofs}.
+
+    %Start with the highest buys and lowest sells. keep removing them in pairs so that the total number of buys removed is equal to the total number of sells removed. When the price is the same, stop. One trade might get only half-way matched.
+    {_, HeadsLeaf, Proof} = trie:get(1, Root, open_orders),
+    Heads = leaf:value(HeadsLeaf),
+    {BuyHead, SellHead} = deserialize_heads(Heads),
+    {NewRoot, NewBuyHead, NewSellHead, P} = match_orders2(BuyHead, SellHead, Root, Proof),
+    NewHeads = serialize_heads(NewBuyHead, NewSellHead),
+    Root2 = trie:put(1, NewHeads, NewRoot, open_orders),
+    {Root2, P}.
+
+match_orders2(BuyHead, SellHead, Root, Proofs) ->
+    {_, Buy, _} = orders:get(BuyHead, Root),
+    {_, Sell, _} = orders:get(SellHead, Root),
+    %io:fwrite({Buy, Sell}), %good
+    if
+	Buy == empty -> {Root, 0, SellHead, Proofs};
+	Sell == empty -> {Root, BuyHead, 0, Proofs};
+	true ->
+	    BuyPrice = orders:price(Buy),
+	    SellPrice = orders:price(Sell),
+	    BuyAmount = orders:amount(Buy),
+	    SellAmount = orders:amount(Sell),
+	    BuyPointer = orders:pointer(Buy),
+	    SellPointer = orders:pointer(Sell),
+	    io:fwrite("sell price "),
+	    io:fwrite(integer_to_list(SellPrice)),
+	    io:fwrite("\n"),
+	    io:fwrite("buy price "),
+	    io:fwrite(integer_to_list(BuyPrice)),
+	    io:fwrite("\n"),
+	    if 
+		BuyPrice < SellPrice ->
+		    io:fwrite("done\n"),
+		    {Root, BuyHead, SellHead, Proofs};
+		BuyAmount == SellAmount ->
+		    io:fwrite("buy and sell are the same amount\n"),
+		    Root2 = orders:delete(SellHead, Root),
+		    NewRoot = orders:delete(BuyHead, Root2),
+		    match_orders2(BuyPointer, SellPointer, NewRoot, Proofs);
+		BuyAmount > SellAmount ->
+		    io:fwrite("buy is bigger\n"),
+		    Root2 = orders:delete(SellHead, Root),
+		    NewBuy = orders:update_amount(Buy, SellAmount),
+		    NewRoot = orders:write(NewBuy, Root2),
+		    match_orders2(BuyHead, SellPointer, NewRoot, Proofs);
+		SellAmount > BuyAmount ->
+		    io:fwrite("sell is bigger\n"),
+		    Root2 = orders:delete(BuyHead, Root),
+		    NewSell = orders:update_amount(Sell,BuyAmount),
+		    NewRoot = orders:write(NewSell, Root2),
+		    match_orders2(BuyPointer, SellHead, NewRoot, Proofs)
+	    end
+    end.
 serialize_heads(BuyHead, SellHead) ->
     Rest = (constants:balance_bytes() + constants:price_bytes() + constants:account_bytes())*8,
     KeyLength = constants:key_length()*8,
@@ -124,10 +174,12 @@ empty_list() ->
 
 test() ->
     %start with an empty order book, add some orders, remove some orders, match some, check the final result is good.
-    OrdersA = [orders:make_order(5, 0, 1, 8000, 0, 100),
-	       orders:make_order(2, 0, 1, 9000, 0, 100)],
-    OrdersB = [orders:make_order(3, 0, 1, 10000, 0, 100),
-	       orders:make_order(4, 0, 1, 7000, 0, 100)],
+    OrderA1 = orders:make_order(5, 0, 1, 8000, 0, 100),
+    OrderA2 = orders:make_order(2, 0, 1, 9000, 0, 100),%gets matched first.
+    OrderB1 = orders:make_order(3, 0, 1, 10000, 0, 100),
+    OrderB2 = orders:make_order(4, 0, 1, 7000, 0, 100),%gets matched first
+    OrdersA = [ OrderA1, OrderA2 ],
+    OrdersB = [ OrderB1, OrderB2 ],
     L = empty_list(),
     {L3, _Proofs} = add_orders(L, OrdersA, []),
     {L4, _} = add_orders(L3, OrdersB, []),
@@ -135,52 +187,43 @@ test() ->
     {RH, _} = orders:root_hash(L4),
     {RH, _} = orders:root_hash(L2),
     {_, HeadsLeaf, _} = trie:get(1, L4, open_orders),
-    {BuyHead, _} = deserialize_heads(leaf:value(HeadsLeaf)),
-    {_, Order1, _} = orders:get(BuyHead, L4),
-    P2 = orders:pointer(Order1),
-    {_, Order2, _} = orders:get(P2, L4),
-    P3 = orders:pointer(Order2),
-    {_, Order3, _} = orders:get(P3, L4),
-    P4 = orders:pointer(Order3),
-    {_, Order4, _} = orders:get(P4, L4),
-    {Order1, Order2, Order3, Order4},
+
     {L5, _} = remove_orders(L2, OrdersB, []),
-    %{_, HeadsLeaf2, _} = trie:get(1, L5, open_orders),
-    %{BuyHead2, _} = deserialize_heads(leaf:value(HeadsLeaf2)),
-    %{_, Order1a, _} = orders:get(BuyHead2, L5),
-    %P1a = orders:pointer(Order1a),
-    %{_, Order2a, _} = orders:get(P1a, L5),
-    %{Order1a, Order2a},
-    %io:fwrite("order book l3 "),
-    %{_, HeadsLeaf3, _} = trie:get(1, L3, open_orders),
-    %{BuyHead3, _} = deserialize_heads(leaf:value(HeadsLeaf3)),
-    %{_, Order1b, _} = orders:get(BuyHead3, L3),
-    %P1b = orders:pointer(Order1b),
-    %{_, Order2b, _} = orders:get(P1b, L3),
-    %{Order1a, Order2a} = {Order1b, Order2b},
     {RH2, _} = orders:root_hash(L5),
     {RH2, _} = orders:root_hash(L3),
+    {_, HeadsLeaf2, _} = trie:get(1, L5, open_orders),
+    {BuyHead2, _} = deserialize_heads(leaf:value(HeadsLeaf2)),
+    {_, Order1a, _} = orders:get(BuyHead2, L5),
+    P1a = orders:pointer(Order1a),
+    {_, Order2a, _} = orders:get(P1a, L5),
+    {Order1a, Order2a},
+    %io:fwrite("order book l3 "),
+    {_, HeadsLeaf3, _} = trie:get(1, L3, open_orders),
+    {BuyHead3, _} = deserialize_heads(leaf:value(HeadsLeaf3)),
+    {_, Order1b, _} = orders:get(BuyHead3, L3),
+    P1b = orders:pointer(Order1b),
+    {_, Order2b, _} = orders:get(P1b, L3),
+    {Order1a, Order2a} = {Order1b, Order2b},
+    {R6, _} = add_orders(L, OrdersA, OrdersB), 
+    {L6, _} = match_orders(R6),
+    {L7, _} = add_orders(L, [OrderA1], [OrderB1]), %highs from the first list match lows of the second. buys then sells.
+    {RH3, _} = orders:root_hash(L6),
+    {RH3, _} = orders:root_hash(L7),
+    {L8, _} = add_orders(L, 
+			 [OrderA1],
+			 [orders:make_order(4, 0, 1, 7999, 0, 111)]
+			),
+    {L9, _} = add_orders(L, [], [orders:make_order(4, 0, 1, 7999, 0, 11)]),
+    {L10, _} = match_orders(L8),
+    {L11, _} = match_orders(L9),
+    {_, RRR4, _} = orders:get(4, L10),
+    {_, RRR4, _} = orders:get(4, L11),
+    {_, RRR6, _} = orders:get(5, L10),
+    {_, RRR6, _} = orders:get(5, L11),
+    {_, RRR8, _} = orders:get(1, L10),
+    {_, RRR8, _} = orders:get(1, L11),
+    %io:fwrite({RRR4, RRR5, RRR6, RRR7, RRR8, RRR9}),
+    {RH4, X} = orders:root_hash(L10),
+    {RH4, Y} = orders:root_hash(L11),
     success.
-
-
-    %0 = orders:pointer(Order4),
-    %4 = orders:id(Order1),
-    %5 = orders:id(Order2),
-    %2 = orders:id(Order3),
-    %3 = orders:id(Order4),
-    %success.
-
-
-    %{L4, _} = remove_orders(L2, OrdersA, []),
-    %{RootHash, _, _} = orders:get(1, L3),
-    %{RootHash, _, _} = orders:get(1, L4).
     
-    %calculate an equivalent tree in a different way, and make sure that the root hashes are equal.
-test2(L, OrdersA, OrdersB) ->
-    L2 = add_orders(L, OrdersA++OrdersB, []),
-    L3 = remove_orders(L2, OrdersA, []),
-    OrdersC = [orders:make_order(5, 0, 2, 256*8, 0, 80)],
-    Sell = add_orders(L, [], OrdersC),
-    L5 = match_orders(L3, Sell),
-    L4 = match_orders(Sell, Sell),
-    success.
